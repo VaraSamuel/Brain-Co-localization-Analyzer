@@ -7,6 +7,7 @@ import tempfile
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from analysis import analyze_images
 
@@ -25,7 +26,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.get("/health")
 def health_check():
     return {
         "status": "ok",
@@ -69,3 +70,8 @@ def analyze(
 def get_output(filename: str):
     path = os.path.join(OUTPUT_DIR, filename)
     return FileResponse(path)
+
+
+FRONTEND_DIST = os.path.join(BASE_DIR, "..", "frontend", "dist")
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
