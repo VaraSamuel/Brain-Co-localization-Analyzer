@@ -2,6 +2,20 @@ import React, { useState } from 'react';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
+const VIEWS = [
+  { key: 'all', label: 'All Cells' },
+  { key: 'double', label: 'Red + Blue Overlap' },
+  { key: 'red_positive', label: 'Green + Red' },
+  { key: 'blue_positive', label: 'Green + Blue' },
+];
+
+const VIEW_DESCRIPTIONS = {
+  all: 'All segmented green cells, coloured by classification: green = green only, red = red marker positive, blue = blue marker positive, yellow = both markers present.',
+  double: 'Only cells positive for both red and blue markers (double-positive). All other cells shown as faint outlines for spatial context.',
+  red_positive: 'Cells positive for the red marker (including double-positives). All other cells shown as faint outlines.',
+  blue_positive: 'Cells positive for the blue marker (including double-positives). All other cells shown as faint outlines.',
+};
+
 function FileInput({ label, helper, file, setFile }) {
   return (
     <label className="file-card">
@@ -30,6 +44,7 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [activeView, setActiveView] = useState('all');
 
   async function runAnalysis() {
     if (!green || !red || !blue) {
@@ -40,6 +55,7 @@ export default function App() {
     setLoading(true);
     setError('');
     setResult(null);
+    setActiveView('all');
 
     const formData = new FormData();
     formData.append('green', green);
@@ -64,6 +80,8 @@ export default function App() {
       setLoading(false);
     }
   }
+
+  const currentOverlayUrl = result?.overlay_urls?.[activeView] ?? result?.overlay_url;
 
   return (
     <main className="page">
@@ -121,20 +139,27 @@ export default function App() {
             <StatCard label="Overlap" value={result.total_overlap} note={`${result.overlap_percent}% double+`} />
           </div>
 
-          <div className="explanation">
-            <h2>What the diagram is showing</h2>
-            <p>
-              The overlay uses the green channel as the background. Green circles are cells with no red or blue marker,
-              red circles are red-positive cells, blue circles are blue-positive cells, and yellow circles are cells where
-              red and blue are both detected inside the same green-cell mask.
-            </p>
-          </div>
-
           <div className="viewer">
             <h2>Annotated Overlay</h2>
-            <img src={`${API_BASE}${result.overlay_url}`} alt="Annotated co-localization overlay" />
+
+            <div className="view-buttons">
+              {VIEWS.map(({ key, label }) => (
+                <button
+                  key={key}
+                  className={`view-btn${activeView === key ? ' active' : ''}`}
+                  onClick={() => setActiveView(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <p className="view-desc">{VIEW_DESCRIPTIONS[activeView]}</p>
+
+            <img src={`${API_BASE}${currentOverlayUrl}`} alt="Annotated co-localization overlay" />
+
             <div className="links">
-              <a href={`${API_BASE}${result.overlay_url}`} target="_blank" rel="noreferrer">Open overlay</a>
+              <a href={`${API_BASE}${currentOverlayUrl}`} target="_blank" rel="noreferrer">Open overlay</a>
               <a href={`${API_BASE}${result.csv_url}`} target="_blank" rel="noreferrer">Download CSV</a>
             </div>
           </div>

@@ -253,43 +253,89 @@ def classify_green_cells(labels: np.ndarray, cells: List[Dict], red_img: np.ndar
     return classified, {**totals, **auto_settings}
 
 
-def make_overlay(green_img: np.ndarray, cells: List[Dict], output_path: str) -> None:
+_COLORS = {
+    "green_only": (50, 220, 80),
+    "red_positive": (255, 60, 60),
+    "blue_positive": (60, 140, 255),
+    "double_positive": (255, 210, 0),
+}
+
+_VIEW_FILTER: Dict[str, List[str]] = {
+    "all": ["green_only", "red_positive", "blue_positive", "double_positive"],
+    "double": ["double_positive"],
+    "red_positive": ["red_positive", "double_positive"],
+    "blue_positive": ["blue_positive", "double_positive"],
+}
+
+_VIEW_LEGEND: Dict[str, List[Tuple[str, str]]] = {
+    "all": [
+        ("Green only", "green_only"),
+        ("Red+", "red_positive"),
+        ("Blue+", "blue_positive"),
+        ("Red+Blue overlap", "double_positive"),
+    ],
+    "double": [("Red+Blue overlap", "double_positive")],
+    "red_positive": [("Red+", "red_positive"), ("Red+Blue overlap", "double_positive")],
+    "blue_positive": [("Blue+", "blue_positive"), ("Red+Blue overlap", "double_positive")],
+}
+
+
+def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], output_path: str, view: str = "all") -> None:
     base = normalize_u8(dominant_channel(green_img, "green"))
-    overlay = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
-    overlay = (overlay * 0.55).astype(np.uint8)
+    bg = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
 
-    # RGB colors because image is converted to BGR only at save time.
-    colors = {
-        "green_only": (0, 255, 0),
-        "red_positive": (255, 0, 0),
-        "blue_positive": (0, 130, 255),
-        "double_positive": (255, 255, 0),
-    }
+    shown_classes = set(_VIEW_FILTER.get(view, _VIEW_FILTER["all"]))
+    all_classes = set(_VIEW_FILTER["all"])
+    context_classes = all_classes - shown_classes
 
+    # Dim background to make coloured cells pop.
+    result = (bg * 0.30).astype(np.uint8)
+
+    # Paint filled cell regions for context cells (very dim grey outline only).
     for cell in cells:
-        x = int(round(cell["x"]))
-        y = int(round(cell["y"]))
-        classification = cell["classification"]
-        color = colors.get(classification, (255, 255, 255))
-        radius = 13 if classification == "double_positive" else 9
-        thickness = 3 if classification == "double_positive" else 2
-        cv2.circle(overlay, (x, y), radius, color, thickness)
-        if classification == "double_positive":
-            cv2.putText(overlay, str(cell["cell_id"]), (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+        cls = cell["classification"]
+        if cls not in context_classes:
+            continue
+        mask = (labels == cell["cell_id"]).astype(np.uint8)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(result, contours, -1, (55, 55, 55), 1)
 
-    legend = [
-        ("Green only", colors["green_only"]),
-        ("Red+", colors["red_positive"]),
-        ("Blue+", colors["blue_positive"]),
-        ("Overlap", colors["double_positive"]),
-    ]
-    y0 = 28
-    for i, (label, color) in enumerate(legend):
-        y = y0 + i * 24
-        cv2.circle(overlay, (22, y - 5), 7, color, 2)
-        cv2.putText(overlay, label, (40, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+    # Paint filled cell regions for the active view — semi-transparent fill + bright outline.
+    fill_layer = np.zeros_like(bg, dtype=np.uint8)
+    for cell in cells:
+        cls = cell["classification"]
+        if cls not in shown_classes:
+            continue
+        color = _COLORS[cls]
+        mask = labels == cell["cell_id"]
+        fill_layer[mask] = color
 
-    cv2.imwrite(output_path, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    active_mask = fill_layer.sum(axis=2) > 0
+    if active_mask.any():
+        bg_part = bg[active_mask].astype(np.float32)
+        fill_part = fill_layer[active_mask].astype(np.float32)
+        result[active_mask] = np.clip(bg_part * 0.20 + fill_part * 0.80, 0, 255).astype(np.uint8)
+
+    # Draw crisp 1-px contours on top of the fills.
+    for cell in cells:
+        cls = cell["classification"]
+        if cls not in shown_classes:
+            continue
+        color = _COLORS[cls]
+        mask = (labels == cell["cell_id"]).astype(np.uint8)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(result, contours, -1, color, 1)
+
+    # Legend — filled colour square + label.
+    legend_items = _VIEW_LEGEND.get(view, _VIEW_LEGEND["all"])
+    y0 = 24
+    for i, (label_text, cls_key) in enumerate(legend_items):
+        color = _COLORS[cls_key]
+        y = y0 + i * 22
+        cv2.rectangle(result, (10, y - 10), (22, y + 2), color, -1)
+        cv2.putText(result, label_text, (30, y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
+
+    cv2.imwrite(output_path, cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
 
 
 def _safe_percent(part: int, total: int) -> float:
@@ -308,13 +354,16 @@ def analyze_images(green_path: str, red_path: str, blue_path: str, output_dir: s
     classified_cells, totals_and_marker_settings = classify_green_cells(labels, green_cells, red, blue, config)
 
     run_id = uuid.uuid4().hex[:10]
-    overlay_name = f"overlay_{run_id}.png"
     csv_name = f"cells_{run_id}.csv"
-    overlay_path = os.path.join(output_dir, overlay_name)
     csv_path = os.path.join(output_dir, csv_name)
 
     pd.DataFrame(classified_cells).to_csv(csv_path, index=False)
-    make_overlay(green, classified_cells, overlay_path)
+
+    overlay_files: Dict[str, str] = {}
+    for view in ("all", "double", "red_positive", "blue_positive"):
+        name = f"overlay_{run_id}_{view}.png"
+        make_overlay(green, labels, classified_cells, os.path.join(output_dir, name), view)
+        overlay_files[view] = name
 
     total_green = int(totals_and_marker_settings["total_green"])
     total_red = int(totals_and_marker_settings["total_red"])
@@ -337,6 +386,7 @@ def analyze_images(green_path: str, red_path: str, blue_path: str, output_dir: s
         "cells": classified_cells,
         "overlap_cells": double_positive_cells,
         "auto_settings": {**green_settings, **{k: v for k, v in totals_and_marker_settings.items() if k.endswith("threshold") or k.endswith("median")}},
-        "overlay_file": overlay_name,
+        "overlay_file": overlay_files["all"],
+        "overlay_files": overlay_files,
         "csv_file": csv_name,
     }

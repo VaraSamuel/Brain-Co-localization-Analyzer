@@ -62,6 +62,7 @@ def analyze(
 
         result = analyze_images(green_path, red_path, blue_path, OUTPUT_DIR)
         result["overlay_url"] = f"/outputs/{result['overlay_file']}"
+        result["overlay_urls"] = {view: f"/outputs/{fname}" for view, fname in result["overlay_files"].items()}
         result["csv_url"] = f"/outputs/{result['csv_file']}"
         return result
 

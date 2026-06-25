@@ -114,6 +114,44 @@ button:disabled {
   cursor: wait;
 }
 
+.view-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.view-btn {
+  background: #102818;
+  color: #b8cabe;
+  border: 1px solid #294d35;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.view-btn:hover {
+  background: #1a3d24;
+  color: #eaf7ef;
+  border-color: #3a6b49;
+}
+
+.view-btn.active {
+  background: #31d06a;
+  color: #041006;
+  border-color: #31d06a;
+}
+
+.view-desc {
+  font-size: 13px;
+  color: #7a9a82;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+
 .error {
   color: #ff8a8a;
   font-weight: 700;
