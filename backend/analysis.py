@@ -22,7 +22,7 @@ class AutoConfig:
     total green cells, red-positive cells, blue-positive cells, and double-positive cells.
     """
 
-    green_min_area_floor: int = 120
+    green_min_area_floor: int = 60
     green_max_area_ceiling: int = 3000
     min_positive_fraction: float = 0.20
     min_positive_signal_ratio: float = 1.50
@@ -63,8 +63,8 @@ def _estimate_area_limits(candidate_labels: np.ndarray, config: AutoConfig) -> T
         return 50, 2500, 20.0
 
     median_area = float(np.median(areas))
-    min_area = int(max(config.green_min_area_floor, median_area * 0.50))
-    max_area = int(min(config.green_max_area_ceiling, median_area * 4.0))
+    min_area = int(max(config.green_min_area_floor, median_area * 0.30))
+    max_area = int(min(config.green_max_area_ceiling, median_area * 5.0))
     diameter = float(np.sqrt(4.0 * median_area / np.pi))
     return min_area, max_area, diameter
 
@@ -89,18 +89,19 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
     except ValueError:
         otsu = float(np.percentile(enhanced, 90))
 
-    # Slightly conservative threshold to capture full cell bodies.
-    binary = enhanced > max(15, otsu * 0.95)
+    # Lower threshold captures more of each cell body.
+    binary = enhanced > max(10, otsu * 0.80)
     binary = morphology.remove_small_objects(binary, min_size=config.green_min_area_floor)
+    # Opening removes single-pixel noise; NO closing so adjacent neurons stay separated.
     binary = morphology.binary_opening(binary, morphology.disk(1))
-    binary = morphology.binary_closing(binary, morphology.disk(2))
     binary = ndi.binary_fill_holes(binary)
 
     rough_labels = measure.label(binary)
     min_area, max_area, avg_diameter = _estimate_area_limits(rough_labels, config)
 
     distance = ndi.distance_transform_edt(binary)
-    min_distance = max(8, int(avg_diameter * 0.60))
+    # Smaller min_distance finds peaks in tightly packed clusters.
+    min_distance = max(5, int(avg_diameter * 0.35))
     peaks = peak_local_max(distance, min_distance=min_distance, labels=binary)
     markers = np.zeros(distance.shape, dtype=np.int32)
     for i, (r, c) in enumerate(peaks, start=1):
@@ -288,35 +289,18 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
     all_classes = set(_VIEW_FILTER["all"])
     context_classes = all_classes - shown_classes
 
-    # Dim background to make coloured cells pop.
-    result = (bg * 0.30).astype(np.uint8)
+    # Keep background bright so underlying neuron morphology is visible.
+    result = (bg * 0.85).astype(np.uint8)
 
-    # Paint filled cell regions for context cells (very dim grey outline only).
+    # Context cells (not in this view): thin dim outline for spatial reference.
     for cell in cells:
-        cls = cell["classification"]
-        if cls not in context_classes:
+        if cell["classification"] not in context_classes:
             continue
         mask = (labels == cell["cell_id"]).astype(np.uint8)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(result, contours, -1, (55, 55, 55), 1)
+        cv2.drawContours(result, contours, -1, (80, 80, 80), 1)
 
-    # Paint filled cell regions for the active view — semi-transparent fill + bright outline.
-    fill_layer = np.zeros_like(bg, dtype=np.uint8)
-    for cell in cells:
-        cls = cell["classification"]
-        if cls not in shown_classes:
-            continue
-        color = _COLORS[cls]
-        mask = labels == cell["cell_id"]
-        fill_layer[mask] = color
-
-    active_mask = fill_layer.sum(axis=2) > 0
-    if active_mask.any():
-        bg_part = bg[active_mask].astype(np.float32)
-        fill_part = fill_layer[active_mask].astype(np.float32)
-        result[active_mask] = np.clip(bg_part * 0.20 + fill_part * 0.80, 0, 255).astype(np.uint8)
-
-    # Draw crisp 1-px contours on top of the fills.
+    # Active cells: 2-px coloured ROI outline — no fill, neuron texture shows through.
     for cell in cells:
         cls = cell["classification"]
         if cls not in shown_classes:
@@ -324,7 +308,7 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
         color = _COLORS[cls]
         mask = (labels == cell["cell_id"]).astype(np.uint8)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(result, contours, -1, color, 1)
+        cv2.drawContours(result, contours, -1, color, 2)
 
     # Legend — filled colour square + label.
     legend_items = _VIEW_LEGEND.get(view, _VIEW_LEGEND["all"])
