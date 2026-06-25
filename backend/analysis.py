@@ -79,7 +79,8 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
     green_raw = dominant_channel(green_img, "green")
     green_u8 = normalize_u8(green_raw)
 
-    background = cv2.GaussianBlur(green_u8, (0, 0), 18)
+    # Larger sigma = gentler background removal, preserves dimmer neurons.
+    background = cv2.GaussianBlur(green_u8, (0, 0), 30)
     enhanced = cv2.subtract(green_u8, background)
     enhanced = exposure.rescale_intensity(enhanced, out_range=(0, 255)).astype(np.uint8)
     enhanced = cv2.GaussianBlur(enhanced, (3, 3), 0)
@@ -89,8 +90,8 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
     except ValueError:
         otsu = float(np.percentile(enhanced, 90))
 
-    # Lower threshold captures more of each cell body.
-    binary = enhanced > max(10, otsu * 0.80)
+    # Aggressive threshold to capture dimmer neurons.
+    binary = enhanced > max(8, otsu * 0.65)
     binary = morphology.remove_small_objects(binary, min_size=config.green_min_area_floor)
     # Opening removes single-pixel noise; NO closing so adjacent neurons stay separated.
     binary = morphology.binary_opening(binary, morphology.disk(1))
@@ -292,15 +293,8 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
     # Keep background bright so underlying neuron morphology is visible.
     result = (bg * 0.85).astype(np.uint8)
 
-    # Context cells (not in this view): thin dim outline for spatial reference.
-    for cell in cells:
-        if cell["classification"] not in context_classes:
-            continue
-        mask = (labels == cell["cell_id"]).astype(np.uint8)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(result, contours, -1, (80, 80, 80), 1)
-
     # Active cells: 2-px coloured ROI outline — no fill, neuron texture shows through.
+    # Filtered views show ONLY the relevant cells so counts are easy to verify visually.
     for cell in cells:
         cls = cell["classification"]
         if cls not in shown_classes:
