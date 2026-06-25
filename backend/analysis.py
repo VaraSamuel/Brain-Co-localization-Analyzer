@@ -24,8 +24,8 @@ class AutoConfig:
 
     green_min_area_floor: int = 60
     green_max_area_ceiling: int = 3000
-    min_positive_fraction: float = 0.20
-    min_positive_signal_ratio: float = 1.50
+    min_positive_fraction: float = 0.08
+    min_positive_signal_ratio: float = 1.15
 
 
 def read_image(path: str) -> np.ndarray:
@@ -163,8 +163,8 @@ def _channel_positive_stats(channel: np.ndarray, labels: np.ndarray) -> Dict:
             threshold = float(filters.threshold_otsu(valid))
         except ValueError:
             threshold = float(np.percentile(valid, 95))
-        # Avoid classifying weak haze as marker-positive.
-        threshold = max(threshold, float(np.percentile(valid, 88)))
+        # Floor at 72nd percentile — generous enough to catch dim positives.
+        threshold = max(threshold, float(np.percentile(valid, 72)))
         background_mean = float(np.median(valid))
 
     return {"enhanced": enhanced, "threshold": threshold, "background_mean": background_mean}
@@ -287,8 +287,6 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
     bg = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
 
     shown_classes = set(_VIEW_FILTER.get(view, _VIEW_FILTER["all"]))
-    all_classes = set(_VIEW_FILTER["all"])
-    context_classes = all_classes - shown_classes
 
     # Keep background bright so underlying neuron morphology is visible.
     result = (bg * 0.85).astype(np.uint8)
