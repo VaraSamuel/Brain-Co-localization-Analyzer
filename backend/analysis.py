@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from scipy import ndimage as ndi
+from scipy.spatial import ConvexHull
 from skimage import exposure, filters, measure, morphology, segmentation
 from skimage.feature import peak_local_max
 
@@ -320,6 +321,23 @@ _VIEW_LEGEND: Dict[str, List[Tuple[str, str]]] = {
 }
 
 
+def _cell_hull_polygon(mask: np.ndarray) -> np.ndarray | None:
+    """Smooth convex-hull outline for one cell's raw mask, same approach as
+    NeuroTrace: raw watershed/threshold boundaries are jagged pixel noise, the
+    convex hull of the region's coordinates gives a clean outline that still
+    tracks the cell's real size and position."""
+    coords = np.column_stack(np.nonzero(mask))  # (row, col)
+    if len(coords) < 3:
+        return None
+    try:
+        hull = ConvexHull(coords)
+    except Exception:
+        return None
+    hull_coords = coords[hull.vertices]
+    xy = np.flip(hull_coords, axis=1)  # (row, col) -> (x, y)
+    return xy.astype(np.int32)
+
+
 def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], output_path: str, view: str = "all") -> None:
     base = normalize_u8(dominant_channel(green_img, "green"))
     bg = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
@@ -329,16 +347,20 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
     # Keep background bright so underlying neuron morphology is visible.
     result = (bg * 0.85).astype(np.uint8)
 
-    # Active cells: 2-px coloured ROI outline — no fill, neuron texture shows through.
+    # Active cells: thin coloured convex-hull outline — no fill, neuron texture
+    # shows through. Convex hull instead of the raw mask contour, since the
+    # raw watershed boundary is jagged pixel noise, not a clean cell outline.
     # Filtered views show ONLY the relevant cells so counts are easy to verify visually.
     for cell in cells:
         cls = cell["classification"]
         if cls not in shown_classes:
             continue
         color = _COLORS[cls]
-        mask = (labels == cell["cell_id"]).astype(np.uint8)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(result, contours, -1, color, 2)
+        mask = labels == cell["cell_id"]
+        hull_xy = _cell_hull_polygon(mask)
+        if hull_xy is None:
+            continue
+        cv2.polylines(result, [hull_xy.reshape(-1, 1, 2)], isClosed=True, color=color, thickness=1, lineType=cv2.LINE_AA)
 
     # Legend — filled colour square + label.
     legend_items = _VIEW_LEGEND.get(view, _VIEW_LEGEND["all"])
