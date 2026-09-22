@@ -69,11 +69,25 @@ def _estimate_area_limits(candidate_labels: np.ndarray, config: AutoConfig) -> T
     return min_area, max_area, diameter
 
 
+def _adaptive_block_size(shape: Tuple[int, int]) -> int:
+    """Local-threshold neighborhood size: big enough to span several cells (so
+    it captures the local background level, not a single cell's own
+    brightness), small enough to still track real illumination gradients
+    across a large field (e.g. a spheroid that's dimmer in the middle)."""
+    short_side = min(shape[:2])
+    size = int(short_side / 30)
+    size = max(25, min(size, 121))
+    if size % 2 == 0:
+        size += 1
+    return size
+
+
 def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.ndarray, List[Dict], Dict]:
     """Segment cell bodies from the green channel using automatic thresholds.
 
     This is intentionally local and API-free. It uses contrast normalization,
-    background subtraction, Otsu thresholding, morphology, and watershed splitting.
+    background subtraction, local adaptive thresholding, morphology, and
+    watershed splitting.
     """
 
     green_raw = dominant_channel(green_img, "green")
@@ -90,8 +104,25 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
     except ValueError:
         otsu = float(np.percentile(enhanced, 90))
 
-    # Aggressive threshold to capture dimmer neurons.
-    binary = enhanced > max(8, otsu * 0.65)
+    # Local/adaptive thresholding instead of one global cutoff: a single Otsu
+    # threshold over the whole field systematically misses real cells in
+    # dimmer regions (e.g. deeper into a 3D spheroid, or uneven illumination),
+    # since their brightness never crosses the global cutoff even though
+    # they're clearly distinct from their own local background. Each
+    # neighborhood gets its own cutoff instead, computed via a local Gaussian-
+    # weighted mean (cv2's ADAPTIVE_THRESH_GAUSSIAN_C).
+    block_size = _adaptive_block_size(enhanced.shape)
+    binary = (
+        cv2.adaptiveThreshold(
+            enhanced,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=block_size,
+            C=-3,
+        )
+        > 0
+    )
     binary = morphology.remove_small_objects(binary, min_size=config.green_min_area_floor)
     # Opening removes single-pixel noise; NO closing so adjacent neurons stay separated.
     binary = morphology.binary_opening(binary, morphology.disk(1))
