@@ -25,8 +25,12 @@ class AutoConfig:
 
     green_min_area_floor: int = 60
     green_max_area_ceiling: int = 3000
-    min_positive_fraction: float = 0.08
-    min_positive_signal_ratio: float = 1.15
+    # Red/blue markers here are punctate (a handful of bright dots per cell,
+    # not a diffuse fill), so positivity is judged by whether a cell contains
+    # real bright puncta at all (an absolute pixel count), not by what
+    # fraction of the cell's area is bright — a fraction-of-area rule
+    # systematically misses genuine puncta in larger cells.
+    min_positive_pixel_count: int = 5
 
 
 def read_image(path: str) -> np.ndarray:
@@ -179,7 +183,7 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
         "estimated_min_area": int(min_area),
         "estimated_max_area": int(max_area),
         "estimated_cell_diameter_px": round(avg_diameter, 2),
-        "positive_fraction_threshold": config.min_positive_fraction,
+        "min_positive_pixel_count": config.min_positive_pixel_count,
     }
     return cleaned, cells, auto_settings
 
@@ -242,15 +246,8 @@ def classify_green_cells(labels: np.ndarray, cells: List[Dict], red_img: np.ndar
         red_max = float(red_values.max())
         blue_max = float(blue_values.max())
 
-        red_positive = (
-            red_fraction >= config.min_positive_fraction
-            and red_mean >= red_stats["background_mean"] * config.min_positive_signal_ratio
-        )
-
-        blue_positive = (
-            blue_fraction >= config.min_positive_fraction
-            and blue_mean >= blue_stats["background_mean"] * config.min_positive_signal_ratio
-        )
+        red_positive = int(red_positive_pixels.sum()) >= config.min_positive_pixel_count
+        blue_positive = int(blue_positive_pixels.sum()) >= config.min_positive_pixel_count
 
         if red_positive and blue_positive:
             classification = "double_positive"
@@ -344,10 +341,11 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
 
     shown_classes = set(_VIEW_FILTER.get(view, _VIEW_FILTER["all"]))
 
-    # Keep background bright so underlying neuron morphology is visible.
-    result = (bg * 0.85).astype(np.uint8)
+    # Dim the background enough that coloured outlines stand out clearly
+    # against bright neuron texture, while still showing morphology.
+    result = (bg * 0.65).astype(np.uint8)
 
-    # Active cells: thin coloured convex-hull outline — no fill, neuron texture
+    # Active cells: coloured convex-hull outline — no fill, neuron texture
     # shows through. Convex hull instead of the raw mask contour, since the
     # raw watershed boundary is jagged pixel noise, not a clean cell outline.
     # Filtered views show ONLY the relevant cells so counts are easy to verify visually.
@@ -360,7 +358,7 @@ def make_overlay(green_img: np.ndarray, labels: np.ndarray, cells: List[Dict], o
         hull_xy = _cell_hull_polygon(mask)
         if hull_xy is None:
             continue
-        cv2.polylines(result, [hull_xy.reshape(-1, 1, 2)], isClosed=True, color=color, thickness=1, lineType=cv2.LINE_AA)
+        cv2.polylines(result, [hull_xy.reshape(-1, 1, 2)], isClosed=True, color=color, thickness=2, lineType=cv2.LINE_AA)
 
     # Legend — filled colour square + label.
     legend_items = _VIEW_LEGEND.get(view, _VIEW_LEGEND["all"])
