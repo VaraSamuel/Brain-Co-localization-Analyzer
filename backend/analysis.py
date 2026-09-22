@@ -124,8 +124,15 @@ def segment_green_cells(green_img: np.ndarray, config: AutoConfig) -> Tuple[np.n
         > 0
     )
     binary = morphology.remove_small_objects(binary, min_size=config.green_min_area_floor)
-    # Opening removes single-pixel noise; NO closing so adjacent neurons stay separated.
+    # Opening removes single-pixel noise.
     binary = morphology.binary_opening(binary, morphology.disk(1))
+    # Closing fuses the sub-threshold pinholes that adaptive thresholding leaves
+    # inside an otherwise-solid cell (it reacts to local noise, not just real
+    # gaps), which watershed would otherwise split into several tiny fake
+    # cells. disk(3) is small relative to a ~19px cell diameter, so genuinely
+    # separate touching cells still get split by the peak-based watershed step
+    # below rather than being fused back together here.
+    binary = morphology.binary_closing(binary, morphology.disk(3))
     binary = ndi.binary_fill_holes(binary)
 
     rough_labels = measure.label(binary)
